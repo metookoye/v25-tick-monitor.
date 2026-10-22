@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#101827">
+<title>V25 Accumulator Tick Monitor</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--line:#29374e;--text:#eef4ff;--muted:#9eacc3;--green:#46d39a;--amber:#ffc857;--red:#ff707a;--blue:#7fb3ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom)}
+main{max-width:900px;margin:auto;padding:16px 0 32px}h1{font-size:1.45rem;margin:5px 0}h2{font-size:1.05rem;margin:0 0 12px}.sub{color:var(--muted);font-size:.9rem;line-height:1.45}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:15px;margin:12px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.row>*{flex:1;min-width:120px}
+button,select,input{font:inherit;border-radius:10px;border:1px solid var(--line);background:#0b1424;color:var(--text);padding:11px;width:100%;min-height:44px}
+button{font-weight:650;background:#203553;cursor:pointer}button.primary{background:#245aa4}button.stop{background:#48242e}
+button:disabled{opacity:.5}.statgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.stat{padding:12px;background:#0b1424;border:1px solid var(--line);border-radius:12px;min-width:0}.label{font-size:.76rem;color:var(--muted)}.value{font-size:1.1rem;font-weight:700;margin-top:5px;overflow-wrap:anywhere}
+.pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#24334a;color:var(--muted);font-size:.8rem}.good{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}
+#log{max-height:240px;overflow:auto;font: .82rem ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;line-height:1.5}
+.small{font-size:.82rem;color:var(--muted);line-height:1.5}label{display:block;color:var(--muted);font-size:.82rem;margin-bottom:5px}
+@media(min-width:650px){.statgrid{grid-template-columns:repeat(4,minmax(0,1fr))}.twocol{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+</style>
+</head>
+<body><main>
+<header>
+ <div class="pill">PUBLIC MARKET DATA • NO TRADING PERMISSIONS</div>
+ <h1>V25 Accumulator Tick Monitor</h1>
+ <div class="sub">For research and alerts only. This tool never buys, sells, or accesses your account.</div>
+</header>
+
+<section class="panel">
+ <h2>1. Connection</h2>
+ <div class="row">
+  <div><label>Market</label><select id="market"><option value="AUTO">Find Volatility 25 Index automatically</option></select></div>
+  <div><label>Historical sample size</label><select id="sample"><option>500</option><option selected>1000</option><option>2000</option><option>5000</option></select></div>
+ </div>
+ <div class="row" style="margin-top:10px">
+  <button id="connect" class="primary">Connect & load history</button>
+  <button id="disconnect" class="stop" disabled>Disconnect</button>
+ </div>
+ <p id="status" class="small">Not connected. Tap Connect to request public market data.</p>
+</section>
+
+<section class="panel">
+ <h2>2. Live readings</h2>
+ <div class="statgrid">
+  <div class="stat"><div class="label">Current price</div><div class="value" id="price">—</div></div>
+  <div class="stat"><div class="label">Ticks received</div><div class="value" id="tickcount">0</div></div>
+  <div class="stat"><div class="label">Short-term movement</div><div class="value" id="vol">—</div></div>
+  <div class="stat"><div class="label">Directional persistence</div><div class="value" id="trend">—</div></div>
+ </div>
+ <p id="signal" class="small">Waiting for sufficient data. This is a research filter, not a prediction.</p>
+ <div class="row">
+  <button id="sound">Enable sound alerts</button>
+  <button id="notify">Enable browser notifications</button>
+ </div>
+ <p class="small">On iPhone, sound usually requires a tap first. Notifications depend on how the page is hosted/opened and may not work from a local file.</p>
+</section>
+
+<section class="panel">
+ <h2>3. Risk filters (research settings)</h2>
+ <div class="twocol">
+  <div><label>Volatility percentile ceiling</label><select id="volCeiling"><option value="50">50th percentile (stricter)</option><option value="60">60th percentile</option><option selected value="70">70th percentile</option></select></div>
+  <div><label>Trend persistence ceiling</label><select id="trendCeiling"><option value=".45">0.45 (stricter)</option><option selected value=".60">0.60</option><option value=".70">0.70</option></select></div>
+  <div><label>Abnormal-move multiplier</label><select id="jumpMult"><option value="2">2× recent median</option><option selected value="3">3× recent median</option><option value="4">4× recent median</option></select></div>
+  <div><label>Cooldown after candidate alert</label><select id="cooldown"><option value="30">30 ticks</option><option selected value="50">50 ticks</option><option value="100">100 ticks</option></select></div>
+ </div>
+ <p class="small">The monitor only reports “candidate conditions” when the rolling volatility is relatively low versus the loaded history, directional persistence is limited, no recent jump lockout is active, and the connection/data are healthy. These thresholds are not proven profitable.</p>
+</section>
+
+<section class="panel">
+ <h2>4. Historical replay & out-of-sample check</h2>
+ <p class="small">This splits the downloaded ticks chronologically: first 70% for calibration, final 30% for evaluation. It tests whether candidate conditions are followed by relatively large price excursions over the next 10 ticks. This is a proxy-risk test, <b>not</b> a simulated Accumulator contract P&amp;L or proof of an edge.</p>
+ <div class="row">
+  <div><label>Forward evaluation horizon</label><select id="horizon"><option value="5">5 ticks</option><option selected value="10">10 ticks</option><option value="20">20 ticks</option></select></div>
+  <div><label>“Large excursion” threshold (%)</label><input id="excursion" type="number" min="0.001" max="10" step="0.001" value="0.05"></div>
+ </div>
+ <div class="row" style="margin-top:10px">
+  <button id="replay">Run out-of-sample replay</button>
+  <button id="export">Export tick CSV</button>
+ </div>
+ <div id="results" class="small" style="margin-top:12px">No replay run yet.</div>
+</section>
+
+<section class="panel">
+ <h2>5. Event log</h2>
+ <div id="log">Monitor initialized. No account login or trade execution is used.</div>
+ <div class="row" style="margin-top:10px"><button id="clear">Clear log</button><button id="exportLog">Export event log</button></div>
+</section>
+
+<section class="panel">
+ <h2>Before using this with real money</h2>
+ <ul class="small">
+  <li>Accumulator 5% is a contract growth setting, not a 5% account-return promise.</li>
+  <li>This tool does not know your exact contract barrier/range or payout rules and cannot calculate genuine contract win rate or expected return.</li>
+  <li>Tick history may be limited. Save multiple samples over time and retest on data not used to tune settings.</li>
+  <li>Use demo observation first. Never treat a “candidate” alert as a guarantee or as a BUY/SELL instruction.</li>
+  <li>This page uses public market data only. Do not enter your Deriv password, API token, or account credentials.</li>
+ </ul>
+ <p class="small">API reference: <a href="https://developers.deriv.com/docs/data/ticks/" target="_blank" rel="noopener">Live ticks</a> · <a href="https://developers.deriv.com/docs/data/ticks-history/" target="_blank" rel="noopener">Tick history</a></p>
+</section>
+</main>
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ const API = "wss://api.derivws.com/trading/v1/options/ws/public";
+ let ws=null, connected=false, symbol=null, ticks=[], events=[], soundOn=false, audioCtx=null;
+ let lastAlertAt=-1, jumpLock=0, lastTickAt=0, subscriptionId=null, reconnectTimer=null;
+ const maxTicks=12000;
+ function log(msg){
+   const line=`[${new Date().toLocaleTimeString()}] ${msg}`;
+   events.push(line); if(events.length>2000) events.shift();
+   $('log').textContent=events.slice(-250).join('\n'); $('log').scrollTop=$('log').scrollHeight;
+ }
+ function status(msg, cls=''){ $('status').textContent=msg; $('status').className='small '+cls; }
+ function send(obj){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify(obj)); else log('Not connected; request skipped.'); }
+ function connect(){
+   if(ws) try{ws.close()}catch(e){}
+   connected=false; ticks=[]; symbol=null; subscriptionId=null;
+   $('tickcount').textContent='0'; $('price').textContent='—'; $('vol').textContent='—'; $('trend').textContent='—';
+   $('signal').textContent='Loading historical data…'; $('connect').disabled=true; $('disconnect').disabled=false;
+   status('Connecting to Deriv public market-data WebSocket…');
+   try { ws=new WebSocket(API); } catch(e){ status('Could not create WebSocket: '+e.message,'bad'); $('connect').disabled=false; return; }
+   ws.onopen=()=>{
+     connected=true; status('Connected. Discovering active symbols…','good');
+     send({active_symbols:"brief",product_type:"basic",req_id:1});
+   };
+   ws.onmessage=ev=>{
+     let d; try{d=JSON.parse(ev.data)}catch(e){return}
+     if(d.error){log('API error: '+d.error.message); status('API error: '+d.error.message,'bad'); return;}
+     if(d.msg_type==='active_symbols'){
+       const arr=d.active_symbols||[];
+       const found=arr.find(x=>/volatility\s*25\s*index/i.test(x.display_name||x.name||'')) ||
+                   arr.find(x=>/volatility\s*25/i.test(x.display_name||x.name||'') && !/1s|tick/i.test(x.display_name||x.name||''));
+       if(!found){status('Could not identify the exact Volatility 25 symbol. Check the active symbol list/API availability.','bad'); log('No exact Volatility 25 symbol found.'); $('connect').disabled=false; return;}
+       symbol=found.symbol; $('market').innerHTML=''; const opt=document.createElement('option'); opt.value=symbol; opt.textContent=(found.display_name||found.name||symbol)+' ('+symbol+')'; $('market').appendChild(opt);
+       log('Market selected: '+(found.display_name||found.name)+' / '+symbol);
+       status('Requesting '+$('sample').value+' historical ticks for '+symbol+'…');
+       send({ticks_history:symbol,count:Number($('sample').value),end:"latest",style:"ticks",req_id:2});
+     }
+     if(d.msg_type==='history' && d.history){
+       const prices=d.history.prices||[], times=d.history.times||[];
+       ticks=prices.map((p,i)=>({price:Number(p),time:Number(times[i])})).filter(t=>Number.isFinite(t.price)&&Number.isFinite(t.time));
+       if(ticks.length<120){status('Only '+ticks.length+' historical ticks received. More data is needed for the filters. Live stream will still start.','warn');}
+       else status('Loaded '+ticks.length+' historical ticks. Starting live stream…','good');
+       log('Historical ticks loaded: '+ticks.length);
+       send({ticks:symbol,subscribe:1,req_id:3});
+       updateMetrics();
+     }
+     if(d.msg_type==='tick' && d.tick){
+       const t={price:Number(d.tick.quote),time:Number(d.tick.epoch)};
+       if(!Number.isFinite(t.price)||!Number.isFinite(t.time)) return;
+       if(ticks.length && t.time===ticks[ticks.length-1].time && t.price===ticks[ticks.length-1].price) return;
+       ticks.push(t); if(ticks.length>maxTicks) ticks=ticks.slice(-maxTicks);
+       lastTickAt=Date.now(); $('tickcount').textContent=ticks.length.toLocaleString(); $('price').textContent=t.price.toFixed(d.tick.pip_size||2);
+       if(d.subscription && d.subscription.id) subscriptionId=d.subscription.id;
+       updateMetrics(); evaluateLive();
+     }
+   };
+   ws.onerror=()=>{status('WebSocket error. Check connection or retry.','bad'); log('WebSocket error.');};
+   ws.onclose=()=>{connected=false; $('connect').disabled=false; $('disconnect').disabled=true; status('Disconnected. Reconnect to resume monitoring.','warn'); log('WebSocket disconnected.');};
+ }
+ function disconnect(){
+   if(ws){try{if(subscriptionId) send({forget:subscriptionId}); ws.close()}catch(e){}}
+   ws=null; connected=false; $('connect').disabled=false; $('disconnect').disabled=true;
+   status('Disconnected. No new ticks will be collected.','warn');
+ }
+ function absMoves(arr){
+   const out=[]; for(let i=1;i<arr.length;i++){const a=arr[i-1].price,b=arr[i].price; out.push(Math.abs((b-a)/a)*100);}
+   return out;
+ }
+ function quantile(a,q){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y);return s[Math.min(s.length-1,Math.max(0,Math.floor((s.length-1)*q)))];}
+ function metricsAt(arr,i){
+   if(i<101)return null;
+   const p=arr.slice(i-100,i+1).map(x=>x.price), moves=[];
+   for(let j=1;j<p.length;j++) moves.push((p[j]-p[j-1])/p[j-1]*100);
+   const short=moves.slice(-20).map(Math.abs), mid=moves.slice(-50).map(Math.abs);
+   const vol20=short.reduce((a,b)=>a+b,0)/short.length;
+   const signs=moves.slice(-20).map(x=>Math.sign(x));
+   const persistence=Math.abs(signs.reduce((a,b)=>a+b,0))/signs.length;
+   const recentAbs=moves.slice(-100).map(Math.abs);
+   const median=quantile(recentAbs,.5);
+   const lastAbs=Math.abs(moves[moves.length-1]);
+   return {vol20,persistence,median,lastAbs,vol50:mid.reduce((a,b)=>a+b,0)/mid.length};
+ }
+ function makeSignal(arr,i,calibrationCeiling,live=false){
+   const m=metricsAt(arr,i); if(!m)return {ok:false,reason:'Collecting at least 101 ticks',m};
+   const hist=[];
+   const start=Math.max(101,Math.floor(arr.length*.05));
+   const end=live?i:Math.max(start,i);
+   for(let k=start;k<end;k+=3){const x=metricsAt(arr,k);if(x)hist.push(x.vol20);}
+   const ceiling=quantile(hist,Number($('volCeiling').value)/100);
+   const volPass=hist.length>10 && m.vol20<=ceiling;
+   const trendPass=m.persistence<=Number($('trendCeiling').value);
+   const jumpPass=m.lastAbs<=Math.max(m.median*Number($('jumpMult').value),0.000001);
+   return {ok:volPass&&trendPass&&jumpPass,reason:!hist.length?'Insufficient calibration data':!jumpPass?'Abnormal move filter':!volPass?'Volatility above selected threshold':!trendPass?'Directional persistence too high':'All research filters passed',m,ceiling,volPass,trendPass,jumpPass};
+ }
+ function updateMetrics(){
+   if(!ticks.length)return;
+   $('tickcount').textContent=ticks.length.toLocaleString();
+   $('price').textContent=ticks[ticks.length-1].price.toFixed(2);
+   const m=metricsAt(ticks,ticks.length-1);
+   if(!m){$('vol').textContent='Collecting…';$('trend').textContent='Collecting…';return}
+   $('vol').textContent=m.vol20.toFixed(5)+'% / tick';
+   $('trend').textContent=m.persistence.toFixed(2);
+ }
+ function evaluateLive(){
+   const i=ticks.length-1;
+   if(jumpLock>0)jumpLock--;
+   const m=metricsAt(ticks,i); if(!m)return;
+   if(m.lastAbs>Math.max(m.median*Number($('jumpMult').value),0.000001)){
+     jumpLock=50; log('Risk lockout: unusually large tick movement detected.'); $('signal').textContent='NO TRADE: abnormal move. Lockout active.'; $('signal').className='small bad'; return;
+   }
+   if(jumpLock>0){$('signal').textContent='NO TRADE: post-jump lockout ('+jumpLock+' ticks remaining).';$('signal').className='small warn';return;}
+   const s=makeSignal(ticks,i,0,true);
+   if(s.ok){
+     if(i-lastAlertAt>=Number($('cooldown').value)){
+       lastAlertAt=i; const msg='Candidate conditions passed. Volatility '+m.vol20.toFixed(5)+'%; persistence '+m.persistence.toFixed(2)+'. Not a BUY/SELL instruction.';
+       $('signal').textContent='CANDIDATE CONDITIONS: '+msg; $('signal').className='small good'; log(msg); alertUser();
+     } else {$('signal').textContent='Filters pass, but alert cooldown is active.';$('signal').className='small warn';}
+   }else{$('signal').textContent='NO TRADE: '+s.reason+'.';$('signal').className='small warn';}
+ }
+ function alertUser(){
+   if(soundOn && audioCtx){try{const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.frequency.value=880;g.gain.value=.08;o.start();o.stop(audioCtx.currentTime+.18)}catch(e){}}
+   if('Notification' in window && Notification.permission==='granted'){try{new Notification('V25 Monitor',{body:'Candidate conditions passed. Review the dashboard; not a trade instruction.'})}catch(e){}}
+ }
+ function runReplay(){
+   if(ticks.length<300){$('results').textContent='Need at least 300 ticks to run a meaningful split. Load more history or collect live ticks first.';return;}
+   const n=ticks.length, split=Math.floor(n*.7), horizon=Number($('horizon').value), threshold=Number($('excursion').value);
+   const train=ticks.slice(0,split), test=ticks.slice(split);
+   // Calibration uses only the training section. Test thresholds are based on training metrics.
+   const trainVol=[]; for(let i=101;i<train.length;i+=2){const m=metricsAt(train,i);if(m)trainVol.push(m.vol20);}
+   const volCap=quantile(trainVol,Number($('volCeiling').value)/100);
+   let candidates=0,large=0,valid=0,meanExc=0,allExc=[];
+   for(let local=101;local<test.length-horizon;local++){
+     const global=split+local, m=metricsAt(ticks,global); if(!m)continue;
+     const histVol=[]; for(let k=101;k<split;k+=3){const x=metricsAt(ticks,k);if(x)histVol.push(x.vol20);}
+     const volPass=m.vol20<=volCap, trendPass=m.persistence<=Number($('trendCeiling').value);
+     const jumpPass=m.lastAbs<=Math.max(m.median*Number($('jumpMult').value),.000001);
+     if(!(volPass&&trendPass&&jumpPass))continue;
+     candidates++;
+     const entry=ticks[global].price; let maxExc=0;
+     for(let j=1;j<=horizon;j++){const future=ticks[global+j].price;maxExc=Math.max(maxExc,Math.abs((future-entry)/entry)*100);}
+     allExc.push(maxExc); if(maxExc>=threshold)large++; valid++;
+   }
+   meanExc=allExc.length?allExc.reduce((a,b)=>a+b,0)/allExc.length:0;
+   const rate=valid?large/valid*100:0;
+   $('results').innerHTML=`<div class="statgrid">
+    <div class="stat"><div class="label">Training ticks (70%)</div><div class="value">${split}</div></div>
+    <div class="stat"><div class="label">Test ticks (30%)</div><div class="value">${n-split}</div></div>
+    <div class="stat"><div class="label">Test candidates</div><div class="value">${candidates}</div></div>
+    <div class="stat"><div class="label">Large excursion after candidate</div><div class="value">${rate.toFixed(1)}%</div></div>
+   </div><p class="small">Threshold: ${threshold}% absolute move within next ${horizon} ticks. Mean maximum absolute excursion after candidates: ${meanExc.toFixed(5)}%. ${valid===0?'No qualifying candidates in the test section.':'This measures a price-movement proxy only, not contract loss probability.'} Overlapping forward windows can make observations dependent. Test set size: ${valid} candidates.</p>`;
+   log('Out-of-sample proxy replay completed. Candidates: '+candidates+'; large excursions: '+large+'; rate: '+rate.toFixed(1)+'%.');
+ }
+ function download(name,content,type='text/csv'){
+   const blob=new Blob([content],{type}); const url=URL.createObjectURL(blob); const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+ }
+ $('connect').onclick=connect; $('disconnect').onclick=disconnect; $('replay').onclick=runReplay;
+ $('sound').onclick=async()=>{try{const AC=window.AudioContext||window.webkitAudioContext;if(!AC){alert('Audio is not supported in this browser.');return}audioCtx=new AC();await audioCtx.resume();soundOn=true;$('sound').textContent='Sound alerts enabled';log('Sound alerts enabled by user gesture.')}catch(e){alert('Could not enable sound: '+e.message)}};
+ $('notify').onclick=async()=>{if(!('Notification' in window)){alert('Browser notifications are not supported here.');return}try{const p=await Notification.requestPermission();log('Notification permission: '+p);$('notify').textContent='Notifications: '+p}catch(e){alert('Notification permission unavailable. Try hosting the page on HTTPS.')}}
+ $('export').onclick=()=>{if(!ticks.length){alert('No ticks to export yet.');return}download('v25_ticks.csv','timestamp,price\n'+ticks.map(t=>new Date(t.time*1000).toISOString()+','+t.price).join('\n'))};
+ $('exportLog').onclick=()=>download('v25_monitor_log.txt',events.join('\n'),'text/plain');
+ $('clear').onclick=()=>{events=[];$('log').textContent='Log cleared.'};
+ window.addEventListener('beforeunload',()=>{if(ws)ws.close()});
+})();
+</script>
+</body>
+</html>
